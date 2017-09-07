@@ -1,6 +1,13 @@
 {-# LANGUAGE DeriveFunctor #-}
+{-# LANGUAGE ExistentialQuantification #-}
 
 module Main where
+
+newtype Identity a = Identity a
+
+instance Foldable Identity where
+  foldl f zero (Identity x) = f zero x
+  foldr f zero (Identity x) = f x zero
 
 -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- --
 -- Comonad Stuff
@@ -13,6 +20,22 @@ class (Functor m, Copointed m) => Comonad m where
 
 (<<=) :: Comonad m => m a -> (m a -> b) -> m b
 (<<=) x f = fmap f (duplicate x)
+
+-- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- --
+-- Profunctor Stuff
+
+class Profunctor f where
+  lmap :: (c -> a) -> f a b -> f c b
+  rmap :: (b -> d) -> f a b -> f a d
+
+data GenericFoldL a b = forall s. GenericFoldL (s -> b) (s -> a -> s) s
+
+instance Profunctor GenericFoldL where
+  lmap f (GenericFoldL result iterate zero) = GenericFoldL result (\x y -> iterate x (f y)) zero
+  rmap f (GenericFoldL result iterate zero) = GenericFoldL (f . result) iterate zero
+
+runFold :: Foldable f => GenericFoldL a b -> f a -> b
+runFold (GenericFoldL result iterate zero) = result . foldl iterate zero
 
 -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- --
 -- Zipper Stuff --
@@ -30,7 +53,7 @@ instance Copointed Zipper where
   extract (Zipper _ x _) = x
 
 instance Comonad Zipper where
-  duplicate x = Zipper (iterate right x) x (iterate left x)
+  duplicate x = Zipper (iterate left x) x (iterate right x)
 
 -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- --
 -- Grid Stuff --
@@ -54,11 +77,16 @@ instance Comonad Grid where
 -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- --
 -- Conway Stuff --
 
+boolToInt :: Bool -> Int
+boolToInt b = if b then 1 else 0
+
+neighboursOver :: Foldable f => f Bool -> Int
+neighboursOver = runFold (GenericFoldL id (\x y -> x + boolToInt y) 0) 
+
 getAdjacent :: Grid Bool -> Int
-getAdjacent (Grid (Zipper xs y zs)) = (f $ head xs) + f y + (f $ head zs) - (if extract y then 1 else 0)
+getAdjacent (Grid (Zipper xs y zs)) = (f $ head xs) + f y + (f $ head zs) - (neighboursOver (Identity $ extract y))
   where
-    f (Zipper xs y zs) = count [head xs, y, head zs]
-    count = foldl (\y x -> y + (if x then 1 else 0)) 0
+    f (Zipper xs y zs) = neighboursOver [head xs, y, head zs]
 
 aliveNext :: Grid Bool -> Bool
 aliveNext g = let n = getAdjacent g in
@@ -115,7 +143,6 @@ printIters init n = do
   let p = putStrLn . (showGrid 3)
       maps = take n $ iterate step init
   mapM_ p maps
-
 
 main :: IO ()
 main = do
