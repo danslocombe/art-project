@@ -1,7 +1,10 @@
 {-# LANGUAGE DeriveFunctor #-}
 {-# LANGUAGE ExistentialQuantification #-}
+{-# LANGUAGE GeneralizedNewtypeDeriving #-}
 
 module Main where
+
+import Data.Monoid ((<>))
 
 newtype Identity a = Identity a
 
@@ -55,6 +58,10 @@ instance Copointed Zipper where
 instance Comonad Zipper where
   duplicate x = Zipper (iterate left x) x (iterate right x)
 
+instance Foldable Zipper where
+  -- foldMap f (Zipper xs y zs) = foldMap f xs <> f y <> foldMap f zs
+  foldMap f (Zipper xs y zs) = f y <> foldMap id (zipWith (<>) (map f xs) (map f zs))
+
 -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- --
 -- Grid Stuff --
 
@@ -74,19 +81,36 @@ instance Comonad Grid where
       oneUp :: Zipper (Zipper a) -> Zipper (Zipper (Zipper a))
       oneUp a = Zipper (dropIter (fmap left) a) a (dropIter (fmap right) a)
 
+instance Foldable Grid where
+  foldMap f (Grid x) = foldMap id $ fmap (foldMap f) x
+
+newtype SumInt = SumInt Int deriving (Show, Eq, Num)
+
+e :: Monoid m => Grid m
+e = Grid $ constZipper $ constZipper mempty
+
+x :: Monoid m => Zipper (Zipper m)
+x = fromGrid e
+
+instance Monoid SumInt where
+  mempty = SumInt 0
+  (SumInt n) `mappend` (SumInt m) = SumInt (n + m)
+
+fromSum :: SumInt -> Int
+fromSum (SumInt n) = n
+
 -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- --
 -- Conway Stuff --
 
-boolToInt :: Bool -> Int
-boolToInt b = if b then 1 else 0
+boolToInt :: Bool -> SumInt
+boolToInt b = if b then SumInt 1 else SumInt 0
 
 neighboursOver :: Foldable f => f Bool -> Int
-neighboursOver = runFold (GenericFoldL id (\x y -> x + boolToInt y) 0) 
+neighboursOver = fromSum . runFold (GenericFoldL id (\x y -> x + boolToInt y) 0) 
 
 getAdjacent :: Grid Bool -> Int
-getAdjacent (Grid (Zipper xs y zs)) = (f $ head xs) + f y + (f $ head zs) - (neighboursOver (Identity $ extract y))
-  where
-    f (Zipper xs y zs) = neighboursOver [head xs, y, head zs]
+getAdjacent g = neighboursOver g - neighboursOver (Identity center)
+  where center = extract $ extract $ fromGrid g
 
 aliveNext :: Grid Bool -> Bool
 aliveNext g = let n = getAdjacent g in
