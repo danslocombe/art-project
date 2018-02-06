@@ -100,6 +100,41 @@ fromSum :: SumInt -> Int
 fromSum (SumInt n) = n
 
 -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- --
+-- Ocean Stuff --
+
+avgAdjacent :: Grid Double -> Double
+avgAdjacent g = (sumClose g - center) / 8
+  where center = extract $ extract $ fromGrid g
+
+sumClose :: Grid Double -> Double
+--sumClose = runFold (GenericFoldL id (\(x, n) y -> if n < 2 then x + y else y) 0) 
+--sumClose = foldr (\(x, n) y -> if n > 1 then y else x + y) 0
+sumClose (Grid (Zipper xs y zs)) = sum [f $ head xs, f y, f $ head zs] where
+  f (Zipper xs y zs) = foldl (+) 0 [head xs, y, head zs]
+
+attachGridDist :: Grid a -> Grid (a, Int)
+attachGridDist (Grid x) = Grid x3
+   where
+    x2 = attachDist 0 x
+    x3 = fmap (\(x, n) -> attachDist n x) x2
+
+attachDist :: Int -> Zipper a -> Zipper (a, Int)
+attachDist base (Zipper xs x ys) = Zipper (zip xs [base + 1..]) (x, base) (zip ys [base + 1..])
+
+stepOcean :: Drivers -> (Grid Double, Int) -> (Grid Double, Int)
+stepOcean d (g, t) = (applyDrivers d t (g <<= avgAdjacent), t + 1)
+
+ocillate :: Double -> Int -> Double
+ocillate period time = sin (fromIntegral time / period)
+
+type Drivers = [((Int, Int), Double)]
+
+applyDrivers :: Drivers -> Int -> Grid Double -> Grid Double
+applyDrivers ds t g = foldl (\grid ((x, y), v) -> putOceanCoord v x y grid) g ps
+  where
+    ps = map (\((x, y), p) -> ((x, y), ocillate p t)) ds
+
+-- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- --
 -- Conway Stuff --
 
 boolToInt :: Bool -> SumInt
@@ -130,6 +165,16 @@ step = (<<= aliveNext)
 toFinite :: Int -> Zipper a -> [a]
 toFinite n (Zipper xs y zs) = reverse (take n xs) ++ [y] ++ (take n zs)
 
+showOcean :: Int -> Grid Double -> String
+showOcean n (Grid z) = concat ((\z -> (g <$> toFinite n z) ++ "\n") <$> toFinite n z)
+  where
+    g x = if x > 0 then 'x' else 'o'
+
+showG :: Show a => Int -> Grid a -> String
+showG n (Grid z) = concat $ concat ((\z -> (g <$> toFinite n z) ++ ["\n"]) <$> toFinite n z)
+  where
+    g x = show x
+
 showGrid :: Int -> Grid Bool -> String
 showGrid n (Grid z) = concat ((\z -> (g <$> toFinite n z) ++ "\n") <$> toFinite n z)
   where
@@ -137,6 +182,9 @@ showGrid n (Grid z) = concat ((\z -> (g <$> toFinite n z) ++ "\n") <$> toFinite 
 
 putCoord :: Int -> Int -> Grid Bool -> Grid Bool
 putCoord x y (Grid g) = Grid $ putZip x (\z -> putZip y (\_ -> True) z) g
+
+putOceanCoord :: a -> Int -> Int -> Grid a -> Grid a
+putOceanCoord a x y (Grid g) = Grid $ putZip x (\z -> putZip y (\_ -> a) z) g
 
 putZip :: Int -> (a -> a) -> Zipper a -> Zipper a
 putZip 0 f (Zipper xs y zs) = Zipper xs (f y) zs
@@ -152,6 +200,25 @@ constZipper x = Zipper (repeat x) x (repeat x)
 
 emptyLine = constZipper False
 emptyGrid = Grid $ constZipper emptyLine
+
+emptyOcean = Grid $ constZipper $ constZipper 0
+
+testOcean :: Grid Double
+testOcean =
+  --putOceanCoord 0.5  0 (-1) $
+  --putOceanCoord 1 0 1    $
+  --putOceanCoord (-0.5)  (-1) 0 $
+  --putOceanCoord 0  1 0    $
+  --putOceanCoord 0 0 0    $
+  -- putOceanCoord 0.5  1 (0) $
+  -- putOceanCoord 0.5  (-1) (0) $
+  emptyOcean
+
+drivers = [((0, 0), 5)]
+
+ox = iterate (stepOcean drivers) (testOcean, 0)
+oy = map (showOcean 4 . fst) ox
+oz = mapM putStrLn (take 64 oy)
 
 testMap :: Grid Bool
 testMap =
