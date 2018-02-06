@@ -1,10 +1,19 @@
 {-# LANGUAGE DeriveFunctor #-}
 {-# LANGUAGE ExistentialQuantification #-}
 {-# LANGUAGE GeneralizedNewtypeDeriving #-}
+{-# LANGUAGE FlexibleContexts #-}
 
 module Main where
 
 import Data.Monoid ((<>))
+import Graphics.Gloss
+import Graphics.Gloss.Interface.Pure.Game
+
+data State = State 
+  { getVelGrid :: Grid Double
+  , getPosGrid :: Grid Double
+  , getStep :: Int
+  }
 
 newtype Identity a = Identity a
 
@@ -102,15 +111,40 @@ fromSum (SumInt n) = n
 -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- --
 -- Ocean Stuff --
 
+
+
 avgAdjacent :: Grid Double -> Double
-avgAdjacent g = (sumClose g - center) / 8
+avgAdjacent g = ((sumClose g))
   where center = extract $ extract $ fromGrid g
 
 sumClose :: Grid Double -> Double
 --sumClose = runFold (GenericFoldL id (\(x, n) y -> if n < 2 then x + y else y) 0) 
 --sumClose = foldr (\(x, n) y -> if n > 1 then y else x + y) 0
-sumClose (Grid (Zipper xs y zs)) = sum [f $ head xs, f y, f $ head zs] where
-  f (Zipper xs y zs) = foldl (+) 0 [head xs, y, head zs]
+--
+--sumClose (Grid (Zipper xs y zs)) = sum [f $ head xs, f y, f $ head zs] where
+  --f (Zipper xs y zs) = foldl (+) 0 [head xs, y, head zs]
+ 
+sumClose (grid) = (sum listybig) / (fromIntegral $ length listybig) 
+  where
+
+    Grid (Zipper xs y zs) = attachGridDist grid
+
+    listybig0 :: [(Double, Int)]
+    listybig0 = concat $ concatMap (fmap g) [take n xs, [y], take n zs]
+
+    listybig = fst <$> filter (\(_, k) -> k <= n2) listybig0
+
+    --f :: Zipper Double -> Double
+    --f (Zipper xs y zs) = 
+      ----let listy = concat [take n xs, [y], take n zs] in
+      --(foldl (+) 0 listy) / (fromIntegral $ length listy )
+
+    g :: Zipper (Double, a) -> [(Double, a)]
+    g (Zipper xs y zs) = 
+      concat [take n xs, [y], take n zs]
+
+    n = 3
+    n2 = 3
 
 attachGridDist :: Grid a -> Grid (a, Int)
 attachGridDist (Grid x) = Grid x3
@@ -121,8 +155,25 @@ attachGridDist (Grid x) = Grid x3
 attachDist :: Int -> Zipper a -> Zipper (a, Int)
 attachDist base (Zipper xs x ys) = Zipper (zip xs [base + 1..]) (x, base) (zip ys [base + 1..])
 
-stepOcean :: Drivers -> (Grid Double, Int) -> (Grid Double, Int)
-stepOcean d (g, t) = (applyDrivers d t (g <<= avgAdjacent), t + 1)
+stepOcean :: Int -> Drivers -> (Grid Double, Int) -> (Grid Double, Int)
+stepOcean size d (g, t) = (constrict size 0 $ applyDrivers d t (g <<= avgAdjacent), t + 1)
+
+constrict :: Int -> a -> Grid a -> Grid a
+constrict n x (Grid z) = Grid $ constrictZipper n (constZipper x) z'
+  where
+    z' = fmap (constrictZipper n x) z
+
+
+constrictZipper :: Int -> a -> Zipper a -> Zipper a
+constrictZipper n x (Zipper xs y zs) = Zipper xs' y zs'
+  where
+    tx = take n xs
+    xs' = tx ++ repeat x
+    tz = take n zs
+    zs' = tz ++ repeat x
+
+
+sqr x = x * x
 
 ocillate :: Double -> Int -> Double
 ocillate period time = sin (fromIntegral time / period)
@@ -130,9 +181,11 @@ ocillate period time = sin (fromIntegral time / period)
 type Drivers = [((Int, Int), Double)]
 
 applyDrivers :: Drivers -> Int -> Grid Double -> Grid Double
-applyDrivers ds t g = foldl (\grid ((x, y), v) -> putOceanCoord v x y grid) g ps
+applyDrivers ds t g = foldl (\grid ((x, y), v) -> fGrid (f v) x y grid) g ps
   where
     ps = map (\((x, y), p) -> ((x, y), ocillate p t)) ds
+    weighting = 0.8
+    f x y = (x * (1-weighting) + y * weighting) 
 
 -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- --
 -- Conway Stuff --
@@ -175,6 +228,9 @@ showG n (Grid z) = concat $ concat ((\z -> (g <$> toFinite n z) ++ ["\n"]) <$> t
   where
     g x = show x
 
+showZ :: Show a => Int -> Zipper a -> String
+showZ i (Zipper xs y zs) = show (take i xs) ++ show y ++ show (take i zs)
+
 showGrid :: Int -> Grid Bool -> String
 showGrid n (Grid z) = concat ((\z -> (g <$> toFinite n z) ++ "\n") <$> toFinite n z)
   where
@@ -185,6 +241,9 @@ putCoord x y (Grid g) = Grid $ putZip x (\z -> putZip y (\_ -> True) z) g
 
 putOceanCoord :: a -> Int -> Int -> Grid a -> Grid a
 putOceanCoord a x y (Grid g) = Grid $ putZip x (\z -> putZip y (\_ -> a) z) g
+
+fGrid :: (a -> a) -> Int -> Int -> Grid a -> Grid a
+fGrid f x y (Grid g) = Grid $ putZip x (\z -> putZip y f z) g
 
 putZip :: Int -> (a -> a) -> Zipper a -> Zipper a
 putZip 0 f (Zipper xs y zs) = Zipper xs (f y) zs
@@ -214,11 +273,13 @@ testOcean =
   -- putOceanCoord 0.5  (-1) (0) $
   emptyOcean
 
-drivers = [((0, 0), 5)]
+drivers = [((0, 0), 400), ((15, 0), 300), ((6, -2), 200), ((2, -8), 350)]
+--drivers = [((0, 10), 50), ((15, 3), 80)]
+--drivers = [((0, 0), 50)]
 
-ox = iterate (stepOcean drivers) (testOcean, 0)
+ox = iterate (stepOcean 32 drivers) (testOcean, 0)
 oy = map (showOcean 4 . fst) ox
-oz = mapM putStrLn (take 64 oy)
+oz = mapM putStrLn (take 4 oy)
 
 testMap :: Grid Bool
 testMap =
@@ -236,5 +297,80 @@ printIters init n = do
   mapM_ p maps
 
 main :: IO ()
-main = do
-  printIters testMap 10
+main =
+  play 
+    (InWindow "Wave Test" (512, 512) (20, 20))
+    black
+    100
+    (State testOcean emptyOcean 0)
+    render
+    handle
+    tick
+
+ocean_size = 26
+
+render :: State -> Picture
+render s = Color white $ Translate 0 (-100) (Pictures circles)
+  where
+    --(Grid grid) = getPosGrid s
+    (Grid grid) = getVelGrid s
+    points = toFinite ocean_size $ fmap (toFinite ocean_size) grid
+
+    pointsLabeled :: [(Double, (Int, Int))]
+    pointsLabeled = concat $ zipWith (\xs n -> zip xs (zip (repeat n) [1..])) points [1..]
+
+    circlesSimSpace = map (\(z, (x, y)) -> (Circle 1, x, y, z)) pointsLabeled
+    --circlesRealSpace = map () circlesSimSpace
+    circles = map (\(c, x, y, z) -> let (xx, yy) = toScreenSpace x y z in Translate xx yy c) circlesSimSpace
+
+
+toScreenSpace :: Int -> Int -> Double -> (Float, Float)
+toScreenSpace x y z = ret
+  where
+  k = 6
+  mult = 128
+  theta0 = pi / k
+  theta1 = pi - (pi / k)
+  basis0 = (cos theta0, sin theta0)
+  basis1 = (cos theta1, sin theta1)
+  -- x' = mult * (1 / (1 + fromIntegral x))
+  -- y' = mult * (1 / (1 + fromIntegral y))
+  mult2 = 40
+  mult3 = mult2 * 20
+  x' = mult2 * (sqrt $ fromIntegral x)
+  y' = mult2 * (sqrt $ fromIntegral y)
+
+  ret = ( (cos theta0) * x' + (cos theta1) * y'
+        , (sin theta1) * x' + (sin theta1) * y' - (realToFrac z * mult3)
+        )
+  
+
+handle _ = id
+
+--rate = 500.0
+
+
+zipZipper :: Zipper a -> Zipper b -> Zipper (a, b)
+zipZipper (Zipper xa ya za) (Zipper xb yb zb) = Zipper (zip xa xb) (ya, yb) (zip za zb)
+
+zipGrid :: Grid a -> Grid b -> Grid (a, b)
+zipGrid (Grid (Zipper xa ya za)) (Grid (Zipper xb yb zb))
+  = Grid $ Zipper (zipWith zipZipper xa xb) (zipZipper ya yb) (zipWith zipZipper za zb)
+
+gg :: Grid Double -> Grid Double -> Grid Double
+gg (velGrid) (posGrid) = x'
+  where
+    dt = 1
+    x = zipGrid velGrid posGrid
+    x' = fmap (\(vel,pos) -> pos + vel * dt) x
+
+tick :: Float -> State -> State
+tick _ s = s {getVelGrid = vg', getStep = s', getPosGrid = pg'}
+  where
+    (vg', s') = stepOcean ocean_size drivers (getVelGrid s, getStep s)
+    --pg' = gg vg' $ getPosGrid s
+    pg' = getPosGrid s
+--tick d (grid, n) = if d * rate > fromIntegral n
+  --then stepOcean ocean_size drivers (grid, n)
+  --else (grid, n)
+                             
